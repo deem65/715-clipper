@@ -1,20 +1,40 @@
-// 715clipper.cpp : This file contains the 'main' function. Program execution begins and ends there.
-//
-
+#include <Windows.h>
 #include <iostream>
+#include "715clipper.h"
 
 int main()
 {
-    std::cout << "Hello World!\n";
+    constexpr int ClipHotkeyId = 1;
+
+    if (!RegisterHotKey(nullptr, ClipHotkeyId, MOD_CONTROL | MOD_SHIFT, VK_F7)) {
+        std::cerr << "failed to register hotkey\n";
+        return 1;
+    }
+
+    std::cout << "running\n";
+    MSG message{};
+
+    while (GetMessage(&message, nullptr, 0, 0) > 0) {
+        if (message.message == WM_HOTKEY && message.wParam == ClipHotkeyId) {
+            OnClipHotkeyPressed();
+        }
+    }
+
+    UnregisterHotKey(nullptr, ClipHotkeyId);
+
+    return 0;
 }
 
-// Run program: Ctrl + F5 or Debug > Start Without Debugging menu
-// Debug program: F5 or Debug > Start Debugging menu
+void OnClipHotkeyPressed()
+{
+    HDC ScreenDC = GetDC(nullptr);
 
-// Tips for Getting Started: 
-//   1. Use the Solution Explorer window to add/manage files
-//   2. Use the Team Explorer window to connect to source control
-//   3. Use the Output window to see build output and other messages
-//   4. Use the Error List window to view errors
-//   5. Go to Project > Add New Item to create new code files, or Project > Add Existing Item to add existing code files to the project
-//   6. In the future, to open this project again, go to File > Open > Project and select the .sln file
+    if (ScreenDC == nullptr) {
+        std::cerr << "failed to access screen\n";
+        return;
+    }
+
+    std::cout << "screen accessed\n";
+
+    ReleaseDC(nullptr, ScreenDC);
+}
