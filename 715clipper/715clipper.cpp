@@ -2,7 +2,9 @@
 #include "715clipper.h"
 
 #include <iostream>
+#include <climits>
 #include <vector>
+#include <fstream>
 
 int main()
 {
@@ -29,6 +31,8 @@ int main()
 
 void OnClipHotkeyPressed()
 {
+    constexpr int bitsPerPixel = 32;
+
     HDC screenDc = GetDC(nullptr);
 
     if (screenDc == nullptr) {
@@ -46,6 +50,7 @@ void OnClipHotkeyPressed()
         return;
     }
 
+    //temporarily gets screen dimensions of primary screen
     int screenWidth = GetSystemMetrics(SM_CXSCREEN);
     int screenHeight = GetSystemMetrics(SM_CYSCREEN);
 
@@ -96,23 +101,42 @@ void OnClipHotkeyPressed()
     bitmapInfo.bmiHeader.biWidth = screenWidth;
     bitmapInfo.bmiHeader.biHeight = -screenHeight;
     bitmapInfo.bmiHeader.biPlanes = 1;
-    bitmapInfo.bmiHeader.biBitCount = 32;
+    bitmapInfo.bmiHeader.biBitCount = bitsPerPixel;
     bitmapInfo.bmiHeader.biCompression = BI_RGB;
 
-    std::vector<unsigned char> pixelBytes(screenWidth * screenHeight * 4); 
+    std::vector<unsigned char> pixelBytes(screenWidth * screenHeight * bitsPerPixel / CHAR_BIT); 
 
-    SelectObject(memoryDc, previousSelectedObject); //GetDIBits() expects the bitmap not to be selected into a dc
+    SelectObject(memoryDc, previousSelectedObject); //GetDIBits expects the bitmap to be unselected in a dc
 
-    int copiedScanLines = GetDIBits(screenDc, screenBitmap, 0, screenHeight, pixelBytes.data(), &bitmapInfo, DIB_RGB_COLORS); //Win32 C style API which requires pointers
+    int copiedScanLines = GetDIBits(screenDc, screenBitmap, 0, screenHeight, pixelBytes.data(), &bitmapInfo, DIB_RGB_COLORS); 
 
     if (copiedScanLines == screenHeight) {
-        std::cout << "extraction succeeded";
+        std::cout << "extraction succeeded\n";
+        SaveBitmap(bitmapInfo.bmiHeader, pixelBytes);
     }
     else {
-        std::cerr << "extraction failed";
-;    }
+        std::cerr << "extraction failed\n";
+        DeleteObject(screenBitmap);
+        DeleteDC(memoryDc);
+        ReleaseDC(nullptr, screenDc);
+        return;
+        }
 
     DeleteObject(screenBitmap);
     DeleteDC(memoryDc);
     ReleaseDC(nullptr, screenDc);
+}
+void SaveBitmap(const BITMAPINFOHEADER& bitmapHeader, const std::vector<unsigned char>& pixelBytes) { 
+    std::ofstream file("capture.bmp", std::ios::binary);
+
+    if (!file) {
+        std::cerr << "failed to create bitmap file\n";
+        return;
+    }
+
+    BITMAPFILEHEADER fileHeader{};
+
+    fileHeader.bfType = 0x4D42; //win bitmap
+    fileHeader.bfOffBits = sizeof(BITMAPFILEHEADER) + sizeof(BITMAPINFOHEADER);
+    fileHeader.bfSize = fileHeader.bfOffBits + static_cast<DWORD>(pixelBytes.size());
 }
