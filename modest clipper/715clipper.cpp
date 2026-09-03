@@ -18,11 +18,11 @@ atomic<bool> captureInProgress{ false };
 
 int main()
 {
-    constexpr int clipHotkeyId = 1;
+    constexpr int clipId = 1;
 
     HWND window = nullptr; //temp
 
-    if (!RegisterHotKey(window, clipHotkeyId, MOD_CONTROL | MOD_SHIFT, VK_F7)) {
+    if (!RegisterHotKey(window, clipId, MOD_CONTROL | MOD_SHIFT, VK_F7)) {
         return 1;
     }
     cout << "running\n";
@@ -30,15 +30,15 @@ int main()
     MSG message{};
 
     while (GetMessage(&message, nullptr, 0, 0) > 0) {
-        if (message.message == WM_HOTKEY && message.wParam == clipHotkeyId) {
-            on_clip(window);
+        if (message.message == WM_HOTKEY && message.wParam == clipId) {
+            clip(window);
         }
     }
-    UnregisterHotKey(nullptr, clipHotkeyId);
+    UnregisterHotKey(nullptr, clipId);
 
     return 0;
 }
-void on_clip(HWND window) {
+void clip(HWND window) {
     bool prev = captureInProgress.exchange(true); 
 
     if (prev) {
@@ -53,33 +53,24 @@ void on_clip(HWND window) {
 bool initialize_frame_context(FrameContext& ctx, HWND window) {
     ctx.window = window;
 
-    if (!get_window_dc(ctx.windowDc, ctx.window)) {
+    if (
+        !get_window_dc(ctx.windowDc, ctx.window) ||
+        !get_memory_dc(ctx.memoryDc, ctx.windowDc) ||
+        !get_window_dimensions(ctx.window, ctx.width, ctx.height) ||
+        !get_window_bitmap(ctx.windowBitmap, ctx.windowDc, ctx.width, ctx.height)
+        ) {
+        cleanup_frame_context(ctx);
         return false;
     }
-    if (!get_memory_dc(ctx.memoryDc, ctx.windowDc)) {
-        ReleaseDC(ctx.window, ctx.windowDc);
-        return false;
-    }
-    if (!get_window_dimensions(ctx.window, ctx.width, ctx.height)){
-        DeleteDC(ctx.memoryDc);
-        ReleaseDC(ctx.window, ctx.windowDc);
-        return false;
-    }
-    if (!get_window_bitmap(ctx.windowBitmap, ctx.windowDc, ctx.width, ctx.height))
-    {
-        DeleteDC(ctx.memoryDc);
-        ReleaseDC(ctx.window, ctx.windowDc);
-        return false;
-    }
-
     return true;
 }
 void capture_multi_frames(HWND window)
 {
-    constexpr int targetFPS = 2;
-    constexpr int durationSeconds = 5;
-    constexpr int frameCount = targetFPS * durationSeconds;
-    constexpr int intervalNs = 1'000'000'000 / targetFPS;
+    constexpr int fps = 5;
+    constexpr int duration = 2;//s
+    constexpr int frameCount = fps * duration;
+    constexpr int intervalNs = 1'000'000'000 / fps;
+    constexpr int bitsPerPixel = 32;
 
     auto interval = chrono::nanoseconds(intervalNs);    
     auto nextTimePoint = chrono::steady_clock::now();
@@ -93,10 +84,14 @@ void capture_multi_frames(HWND window)
     optional<Frame> frame;
     frames.reserve(frameCount);
     for (int i = 0; i < frameCount; i++) {
-        frame = capture_frame(ctx);
+        frame = capture_frame(ctx, bitsPerPixel);
 
         if (frame.has_value()) {
             frames.push_back(move(frame.value()));
+        }
+        else {
+            cerr << "frame" << i << " failed :(";
+            //continues anyway
         }
 
         if (i < frameCount - 1) {
@@ -108,6 +103,10 @@ void capture_multi_frames(HWND window)
     for (int i = 0; i < frames.size(); i++) {
         save_bitmap(frames[i].bitmapHeader, frames[i].pixelBytes, i);
     }
+
+    cout << "requested frames: " << frameCount << '\n';
+    cout << "captured frames: " << frames.size() << '\n';
+    cout << "failed frames: " << frameCount - frames.size() << '\n';
 }
 bool get_window_dc(HDC& windowDc, HWND window) {
     windowDc = GetDC(window);
@@ -140,56 +139,54 @@ void cleanup_frame_context(FrameContext& ctx)
 {
     if (ctx.windowBitmap != nullptr) {
         DeleteObject(ctx.windowBitmap);
+        ctx.windowBitmap = nullptr; //prevents second cleanup
     }
     if (ctx.memoryDc != nullptr) {
         DeleteDC(ctx.memoryDc);
+        ctx.memoryDc = nullptr;
     }
     if (ctx.windowDc != nullptr) {
         ReleaseDC(ctx.window, ctx.windowDc);
+        ctx.windowDc = nullptr;
     }
 }
-optional<Frame> capture_frame(FrameContext& ctx)
+optional<Frame> capture_frame(FrameContext& ctx, int bits)
 {
-    constexpr int bitsPerPixel = 32;
-
     HGDIOBJ previousSelectedObject = SelectObject(ctx.memoryDc, ctx.windowBitmap); 
 
     if (previousSelectedObject == nullptr) {
         return nullopt;
     }
-    if (!BitBlt(ctx.memoryDc, 0, 0, ctx.width, ctx.height, ctx.windowDc, 0, 0, SRCCOPY))
-    {
+    if (!BitBlt(ctx.memoryDc, 0, 0, ctx.width, ctx.height, ctx.windowDc, 0, 0, SRCCOPY)) {
         SelectObject(ctx.memoryDc, previousSelectedObject);
         return nullopt;
     }
-
-    BITMAPINFO bitmapInfo = create_bitmap_info(ctx.width, ctx.height, bitsPerPixel);
     SelectObject(ctx.memoryDc, previousSelectedObject); //GetDIBits expects the bitmap to be unselected in a dc
 
-    return extract_frame_from_bitmap(ctx.windowDc, ctx.windowBitmap, ctx.width, ctx.height, bitsPerPixel);
+    return extract_frame_from_bitmap(ctx.windowDc, ctx.windowBitmap, ctx.width, ctx.height, bits);
 
 }
 void save_bitmap(const BITMAPINFOHEADER& bitmapHeader, const vector<unsigned char>& pixelBytes, int frameNum) {
-    string fileName = "_" + to_string(frameNum) + ".bmp";
-    ofstream file(fileName, ios::binary);
-    if (!file) {
+    string fName = "_" + to_string(frameNum) + ".bmp";
+    ofstream ofStream(fName, ios::binary);
+    if (!ofStream) {
         return;
     }
-    BITMAPFILEHEADER fileHeader{};
-    fileHeader.bfType = 0x4D42; //windows bitmap
-    fileHeader.bfOffBits = sizeof(BITMAPFILEHEADER) + sizeof(BITMAPINFOHEADER);
-    fileHeader.bfSize = fileHeader.bfOffBits + static_cast<DWORD>(pixelBytes.size());
+    BITMAPFILEHEADER fHeader{};
+    fHeader.bfType = 0x4D42; //windows bitmap
+    fHeader.bfOffBits = sizeof(BITMAPFILEHEADER) + sizeof(BITMAPINFOHEADER);
+    fHeader.bfSize = fHeader.bfOffBits + static_cast<DWORD>(pixelBytes.size());
 
-    const char* fileHeaderBytePtr = reinterpret_cast<const char*>(&fileHeader);
+    const char* fileHeaderBytePtr = reinterpret_cast<const char*>(&fHeader);
     const char* bitmapHeaderBytePtr = reinterpret_cast<const char*>(&bitmapHeader);
     const char* pixelBytesPtr = reinterpret_cast<const char*>(pixelBytes.data());
     streamsize pixelBytesStreamSize = static_cast<streamsize>(pixelBytes.size());
 
-    file.write(fileHeaderBytePtr, sizeof(fileHeader));
-    file.write(bitmapHeaderBytePtr, sizeof(bitmapHeader));
-    file.write(pixelBytesPtr, pixelBytesStreamSize);
+    ofStream.write(fileHeaderBytePtr, sizeof(fHeader));
+    ofStream.write(bitmapHeaderBytePtr, sizeof(bitmapHeader));
+    ofStream.write(pixelBytesPtr, pixelBytesStreamSize);
 
-    if (!file) {
+    if (!ofStream) {
         cerr << "bitmap write: fail\n";
         return;
     }

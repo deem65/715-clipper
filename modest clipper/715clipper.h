@@ -20,7 +20,7 @@ struct FrameContext {
     int height{};
 };
 
-void on_clip(HWND window);
+void clip(HWND window);
 
 void capture_multi_frames(HWND window);
 
@@ -39,7 +39,7 @@ void cleanup_frame_context(FrameContext& context);
 
 BITMAPINFO create_bitmap_info(int screenWidth, int screenHeight, int bitsPerPixel);
 
-std::optional<Frame> capture_frame(FrameContext& context);
+std::optional<Frame> capture_frame(FrameContext& context, int bits);
 
 std::optional<Frame> extract_frame_from_bitmap(HDC screenDc, HBITMAP screenBitmap, int screenWidth, int screenHeight, int bitsPerPixel);
 
