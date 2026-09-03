@@ -4,6 +4,7 @@
 *.suo
 *.userosscache
 *.sln.docstates
+*.sln
 
 # Build output
 Debug/
